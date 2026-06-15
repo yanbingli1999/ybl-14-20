@@ -9,6 +9,15 @@ export type CandyType =
 
 export type SpecialCandyType = 'rainbow' | 'bomb' | null;
 
+export type WeatherType = 'sunny' | 'candyRain' | 'caramelStorm' | 'frost';
+
+export interface Weather {
+  type: WeatherType;
+  duration: number;
+  targetCandyType?: CandyType;
+  stickyPositions?: Position[];
+}
+
 export interface Candy {
   id: string;
   type: CandyType;
@@ -18,6 +27,7 @@ export interface Candy {
   specialType: SpecialCandyType;
   isMatched: boolean;
   isFalling: boolean;
+  isSticky: boolean;
 }
 
 export interface Position {
@@ -77,6 +87,7 @@ export interface PlayerProfile {
   reputation: number;
   level: number;
   unlockedStations: string[];
+  hasShelter: boolean;
 }
 
 export interface GameState {
@@ -92,6 +103,9 @@ export interface GameState {
   isAnimating: boolean;
   gamePhase: 'playing' | 'dispatching' | 'result' | 'gameover';
   dispatchResult: DispatchResult | null;
+  weather: Weather;
+  weatherForecast: Weather[];
+  dispatchDelayed: boolean;
 }
 
 export interface DispatchResult {

@@ -1,24 +1,33 @@
-import { Candy, Position, MatchResult, CandyType, SpecialCandyType, BOARD_SIZE, BASIC_CANDY_TYPES } from '@/types';
+import { Candy, Position, MatchResult, CandyType, SpecialCandyType, BOARD_SIZE, BASIC_CANDY_TYPES, Weather } from '@/types';
 import { GAME_CONFIG } from '@/data/config';
+import { getCandyRainBonus } from '@/engine/weatherSystem';
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9);
 }
 
-function getRandomCandyType(): CandyType {
+function getRandomCandyType(weather?: Weather): CandyType {
+  if (weather && weather.type === 'candyRain' && weather.targetCandyType) {
+    const bonus = getCandyRainBonus(weather.targetCandyType, weather);
+    const rand = Math.random();
+    if (rand < 0.5) {
+      return weather.targetCandyType;
+    }
+  }
   return BASIC_CANDY_TYPES[Math.floor(Math.random() * BASIC_CANDY_TYPES.length)];
 }
 
-export function createCandy(row: number, col: number, type?: CandyType): Candy {
+export function createCandy(row: number, col: number, type?: CandyType, weather?: Weather): Candy {
   return {
     id: generateId(),
-    type: type || getRandomCandyType(),
+    type: type || getRandomCandyType(weather),
     row,
     col,
     isSpecial: false,
     specialType: null,
     isMatched: false,
     isFalling: false,
+    isSticky: false,
   };
 }
 
@@ -36,6 +45,7 @@ export function createSpecialCandy(row: number, col: number, specialType: Specia
     specialType,
     isMatched: false,
     isFalling: false,
+    isSticky: false,
   };
 }
 
@@ -199,7 +209,7 @@ export function findAllMatches(board: (Candy | null)[][]): MatchResult[] {
 
     for (let col = 0; col < BOARD_SIZE; col++) {
       const candy = board[row][col];
-      if (candy && !candy.isSpecial && candy.type === matchType) {
+      if (candy && !candy.isSpecial && !candy.isSticky && candy.type === matchType) {
         matchCount++;
       } else {
         if (matchCount >= GAME_CONFIG.MATCH_MIN && matchType) {
@@ -228,8 +238,8 @@ export function findAllMatches(board: (Candy | null)[][]): MatchResult[] {
           });
         }
         matchStart = col;
-        matchType = candy && !candy.isSpecial ? candy.type : null;
-        matchCount = candy && !candy.isSpecial ? 1 : 0;
+        matchType = candy && !candy.isSpecial && !candy.isSticky ? candy.type : null;
+        matchCount = candy && !candy.isSpecial && !candy.isSticky ? 1 : 0;
       }
     }
 
@@ -267,7 +277,7 @@ export function findAllMatches(board: (Candy | null)[][]): MatchResult[] {
 
     for (let row = 0; row < BOARD_SIZE; row++) {
       const candy = board[row][col];
-      if (candy && !candy.isSpecial && candy.type === matchType) {
+      if (candy && !candy.isSpecial && !candy.isSticky && candy.type === matchType) {
         matchCount++;
       } else {
         if (matchCount >= GAME_CONFIG.MATCH_MIN && matchType) {
@@ -296,8 +306,8 @@ export function findAllMatches(board: (Candy | null)[][]): MatchResult[] {
           });
         }
         matchStart = row;
-        matchType = candy && !candy.isSpecial ? candy.type : null;
-        matchCount = candy && !candy.isSpecial ? 1 : 0;
+        matchType = candy && !candy.isSpecial && !candy.isSticky ? candy.type : null;
+        matchCount = candy && !candy.isSpecial && !candy.isSticky ? 1 : 0;
       }
     }
 
@@ -494,13 +504,13 @@ export function applyGravity(board: (Candy | null)[][]): (Candy | null)[][] {
   return newBoard;
 }
 
-export function fillEmptySpaces(board: (Candy | null)[][]): (Candy | null)[][] {
+export function fillEmptySpaces(board: (Candy | null)[][], weather?: Weather): (Candy | null)[][] {
   const newBoard = board.map(row => [...row]);
 
   for (let col = 0; col < BOARD_SIZE; col++) {
     for (let row = 0; row < BOARD_SIZE; row++) {
       if (newBoard[row][col] === null) {
-        newBoard[row][col] = createCandy(row, col);
+        newBoard[row][col] = createCandy(row, col, undefined, weather);
         newBoard[row][col]!.isFalling = true;
       }
     }
@@ -535,13 +545,17 @@ export function placeSpecialCandies(board: (Candy | null)[][], matches: MatchRes
   return newBoard;
 }
 
-export function countClearedCandies(matches: MatchResult[]): Record<CandyType, number> {
+export function countClearedCandies(matches: MatchResult[], weather?: Weather): Record<CandyType, number> {
   const counts: Record<string, number> = {};
 
   for (const match of matches) {
     for (const candy of match.candies) {
       if (!candy.isSpecial) {
-        counts[candy.type] = (counts[candy.type] || 0) + 1;
+        let count = 1;
+        if (weather && weather.type === 'candyRain' && weather.targetCandyType === candy.type) {
+          count = getCandyRainBonus(candy.type, weather);
+        }
+        counts[candy.type] = (counts[candy.type] || 0) + count;
       }
     }
   }

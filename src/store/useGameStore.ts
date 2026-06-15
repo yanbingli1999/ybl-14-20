@@ -8,6 +8,7 @@ import {
   DispatchResult,
   PlayerProfile,
   AllStats,
+  Weather,
 } from '@/types';
 import {
   createInitialBoard,
@@ -29,6 +30,13 @@ import { loadCandiesToTrain, clearTrain } from '@/engine/loadingSystem';
 import { calculateDispatchResult } from '@/engine/dispatchSystem';
 import { generateOrder } from '@/engine/contractSystem';
 import {
+  createInitialWeather,
+  createInitialForecast,
+  advanceWeather,
+  applyStickyToBoard,
+  clearStickyFromBoard,
+} from '@/engine/weatherSystem';
+import {
   loadProfile,
   saveProfile,
   loadStats,
@@ -38,7 +46,7 @@ import {
   clearGameState,
   recordDispatchStats,
 } from '@/utils/storage';
-import { INITIAL_TRAIN, GAME_CONFIG, STATIONS } from '@/data/config';
+import { INITIAL_TRAIN, GAME_CONFIG, STATIONS, WEATHER_CONFIG } from '@/data/config';
 
 interface GameStore {
   board: (Candy | null)[][];
@@ -56,6 +64,9 @@ interface GameStore {
   profile: PlayerProfile;
   stats: AllStats;
   showStats: boolean;
+  weather: Weather;
+  weatherForecast: Weather[];
+  dispatchDelayed: boolean;
 
   selectCandy: (pos: Position) => void;
   processSwap: (pos1: Position, pos2: Position) => void;
@@ -66,6 +77,8 @@ interface GameStore {
   setShowStats: (show: boolean) => void;
   closeResult: () => void;
   changeStation: (stationId: string) => void;
+  buyShelter: () => void;
+  delayDispatch: () => void;
   persist: () => void;
 }
 
@@ -73,9 +86,13 @@ const useGameStore = create<GameStore>((set, get) => {
   const initialProfile = loadProfile();
   const initialStats = loadStats();
   const persisted = loadGameState(initialProfile);
+  const initialWeather = createInitialWeather();
+  const initialForecast = createInitialForecast();
+  let initialBoard = persisted?.board || createInitialBoard();
+  initialBoard = applyStickyToBoard(initialBoard, persisted?.weather || initialWeather);
 
   return {
-    board: persisted?.board || createInitialBoard(),
+    board: initialBoard,
     selectedCandy: null,
     score: persisted?.score ?? 0,
     moves: persisted?.moves ?? GAME_CONFIG.INITIAL_MOVES,
@@ -90,6 +107,9 @@ const useGameStore = create<GameStore>((set, get) => {
     profile: initialProfile,
     stats: initialStats,
     showStats: false,
+    weather: persisted?.weather || initialWeather,
+    weatherForecast: persisted?.weatherForecast || initialForecast,
+    dispatchDelayed: false,
 
     persist: () => {
       const s = get();
@@ -104,14 +124,17 @@ const useGameStore = create<GameStore>((set, get) => {
         maxCombo: s.maxCombo,
         gamePhase: s.gamePhase,
         dispatchResult: s.dispatchResult,
+        weather: s.weather,
+        weatherForecast: s.weatherForecast,
       });
     },
 
     selectCandy: (pos: Position) => {
-      const { selectedCandy, board, isAnimating, gamePhase } = get();
+      const { selectedCandy, board, isAnimating, gamePhase, weather } = get();
 
       if (isAnimating || gamePhase !== 'playing') return;
       if (!board[pos.row][pos.col]) return;
+      if (board[pos.row][pos.col]?.isSticky) return;
 
       if (!selectedCandy) {
         set({ selectedCandy: pos });
@@ -183,6 +206,21 @@ const useGameStore = create<GameStore>((set, get) => {
       let totalCombo = 0;
       let totalScore = 0;
       let allMatches: MatchResult[] = [];
+      const currentWeather = get().weather;
+      const currentForecast = get().weatherForecast;
+      const hasShelter = get().profile.hasShelter;
+
+      const { current: newWeather, newForecast, weatherChanged } = advanceWeather(currentWeather, currentForecast);
+      
+      if (weatherChanged) {
+        currentBoard = clearStickyFromBoard(currentBoard);
+        if (!hasShelter) {
+          currentBoard = applyStickyToBoard(currentBoard, newWeather);
+        }
+        set({ weather: newWeather, weatherForecast: newForecast, board: currentBoard });
+      } else {
+        set({ weather: newWeather, weatherForecast: newForecast });
+      }
 
       const processOneRound = (roundIndex: number): Promise<boolean> => {
         return new Promise(resolve => {
@@ -215,7 +253,11 @@ const useGameStore = create<GameStore>((set, get) => {
             currentBoard = removeMatched(currentBoard);
             currentBoard = placeSpecialCandies(currentBoard, matches);
             currentBoard = applyGravity(currentBoard);
-            currentBoard = fillEmptySpaces(currentBoard);
+            currentBoard = fillEmptySpaces(currentBoard, get().weather);
+
+            if (!get().profile.hasShelter) {
+              currentBoard = applyStickyToBoard(currentBoard, get().weather);
+            }
 
             for (let r = 0; r < currentBoard.length; r++) {
               for (let c = 0; c < currentBoard[r].length; c++) {
@@ -239,8 +281,11 @@ const useGameStore = create<GameStore>((set, get) => {
           round++;
         }
 
-        const candyCounts = countClearedCandies(allMatches);
-        const { train: newTrain } = loadCandiesToTrain(get().train, candyCounts);
+        const candyCounts = countClearedCandies(allMatches, get().weather);
+        const effectiveWeather = get().profile.hasShelter 
+          ? { ...get().weather, type: 'sunny' as const } 
+          : get().weather;
+        const { train: newTrain } = loadCandiesToTrain(get().train, candyCounts, effectiveWeather);
 
         const newMaxCombo = Math.max(get().maxCombo, totalCombo);
 
@@ -264,13 +309,16 @@ const useGameStore = create<GameStore>((set, get) => {
     },
 
     dispatchTrain: () => {
-      const { train, currentOrder, profile, gamePhase, moves, maxCombo } = get();
+      const { train, currentOrder, profile, gamePhase, moves, maxCombo, dispatchDelayed } = get();
 
       if (gamePhase !== 'playing' || !currentOrder) return;
 
       const result = calculateDispatchResult(train, currentOrder);
 
       let newCoins = profile.coins + result.reward - result.penalty;
+      if (dispatchDelayed) {
+        newCoins -= WEATHER_CONFIG.DELAY_DISPATCH_COST;
+      }
       newCoins = Math.max(0, newCoins);
       let newReputation = profile.reputation + result.reputationChange;
       newReputation = Math.max(0, newReputation);
@@ -310,19 +358,28 @@ const useGameStore = create<GameStore>((set, get) => {
     },
 
     nextOrder: () => {
-      const { currentStationId, profile } = get();
+      const { currentStationId, profile, weather, weatherForecast } = get();
       const newOrder = generateOrder(currentStationId, profile.reputation);
+      const newWeather = createInitialWeather();
+      const newForecast = createInitialForecast();
+      let newBoard = createInitialBoard();
+      if (!profile.hasShelter) {
+        newBoard = applyStickyToBoard(newBoard, newWeather);
+      }
 
       set(state => ({
         train: clearTrain(state.train),
         currentOrder: newOrder,
         gamePhase: 'playing',
         dispatchResult: null,
-        board: createInitialBoard(),
+        board: newBoard,
         score: 0,
         moves: GAME_CONFIG.INITIAL_MOVES,
         combo: 0,
         maxCombo: 0,
+        weather: newWeather,
+        weatherForecast: newForecast,
+        dispatchDelayed: false,
       }));
 
       get().persist();
@@ -332,9 +389,15 @@ const useGameStore = create<GameStore>((set, get) => {
       const profile = loadProfile();
       const stationId = profile.unlockedStations[0] || 'candy-town';
       const order = generateOrder(stationId, profile.reputation);
+      const newWeather = createInitialWeather();
+      const newForecast = createInitialForecast();
+      let newBoard = createInitialBoard();
+      if (!profile.hasShelter) {
+        newBoard = applyStickyToBoard(newBoard, newWeather);
+      }
 
       set({
-        board: createInitialBoard(),
+        board: newBoard,
         selectedCandy: null,
         score: 0,
         moves: GAME_CONFIG.INITIAL_MOVES,
@@ -348,6 +411,9 @@ const useGameStore = create<GameStore>((set, get) => {
         dispatchResult: null,
         profile,
         stats: loadStats(),
+        weather: newWeather,
+        weatherForecast: newForecast,
+        dispatchDelayed: false,
       });
 
       clearGameState();
@@ -379,6 +445,51 @@ const useGameStore = create<GameStore>((set, get) => {
         currentOrder: newOrder,
         train: clearTrain(state.train),
       }));
+
+      get().persist();
+    },
+
+    buyShelter: () => {
+      const { profile, weather, board } = get();
+
+      if (profile.hasShelter || profile.coins < WEATHER_CONFIG.SHELTER_COST) return;
+
+      const newProfile: PlayerProfile = {
+        ...profile,
+        coins: profile.coins - WEATHER_CONFIG.SHELTER_COST,
+        hasShelter: true,
+      };
+
+      saveProfile(newProfile);
+
+      const newBoard = clearStickyFromBoard(board);
+
+      set({
+        profile: newProfile,
+        board: newBoard,
+      });
+
+      get().persist();
+    },
+
+    delayDispatch: () => {
+      const { profile, dispatchDelayed, moves, gamePhase } = get();
+
+      if (dispatchDelayed || gamePhase !== 'playing') return;
+      if (profile.coins < WEATHER_CONFIG.DELAY_DISPATCH_COST) return;
+
+      const newProfile: PlayerProfile = {
+        ...profile,
+        coins: profile.coins - WEATHER_CONFIG.DELAY_DISPATCH_COST,
+      };
+
+      saveProfile(newProfile);
+
+      set({
+        profile: newProfile,
+        dispatchDelayed: true,
+        moves: moves + WEATHER_CONFIG.DELAY_DISPATCH_MOVES_BONUS,
+      });
 
       get().persist();
     },

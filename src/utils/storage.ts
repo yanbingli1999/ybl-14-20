@@ -11,10 +11,12 @@ import {
   StationOrder,
   Position,
   DispatchResult,
+  Weather,
 } from '@/types';
 import { STATIONS, INITIAL_TRAIN, GAME_CONFIG } from '@/data/config';
 import { createInitialBoard } from '@/engine/matchEngine';
 import { generateOrder } from '@/engine/contractSystem';
+import { createInitialWeather, createInitialForecast } from '@/engine/weatherSystem';
 
 const STORAGE_KEYS = {
   PROFILE: 'candy-train-profile',
@@ -34,6 +36,8 @@ export interface PersistedGameState {
   maxCombo: number;
   gamePhase: 'playing' | 'dispatching' | 'result' | 'gameover';
   dispatchResult: DispatchResult | null;
+  weather: Weather;
+  weatherForecast: Weather[];
   timestamp: number;
 }
 
@@ -50,10 +54,14 @@ export function loadGameState(profile: PlayerProfile): PersistedGameState | null
   try {
     const data = localStorage.getItem(STORAGE_KEYS.GAME_STATE);
     if (data) {
-      const parsed = JSON.parse(data) as PersistedGameState;
+      const parsed = JSON.parse(data) as any;
       const now = Date.now();
       if (now - parsed.timestamp < 24 * 60 * 60 * 1000) {
-        return parsed;
+        return {
+          ...parsed,
+          weather: parsed.weather || createInitialWeather(),
+          weatherForecast: parsed.weatherForecast || createInitialForecast(),
+        };
       }
     }
   } catch (e) {
@@ -72,6 +80,8 @@ export function loadGameState(profile: PlayerProfile): PersistedGameState | null
     maxCombo: 0,
     gamePhase: 'playing',
     dispatchResult: null,
+    weather: createInitialWeather(),
+    weatherForecast: createInitialForecast(),
     timestamp: Date.now(),
   };
 }
@@ -87,6 +97,7 @@ const DEFAULT_PROFILE: PlayerProfile = {
   reputation: 0,
   level: 1,
   unlockedStations: ['candy-town'],
+  hasShelter: false,
 };
 
 const DEFAULT_STATS: AllStats = {
@@ -117,7 +128,12 @@ export function loadProfile(): PlayerProfile {
   try {
     const data = localStorage.getItem(STORAGE_KEYS.PROFILE);
     if (data) {
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      return {
+        ...DEFAULT_PROFILE,
+        ...parsed,
+        hasShelter: parsed.hasShelter ?? false,
+      };
     }
   } catch (e) {
     console.error('Failed to load profile:', e);

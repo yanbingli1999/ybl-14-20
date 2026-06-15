@@ -2,6 +2,7 @@ import StatusBar from '@/components/StatusBar/StatusBar';
 import GameBoard from '@/components/Board/GameBoard';
 import TrainPanel from '@/components/Train/TrainPanel';
 import StationOrderPanel from '@/components/Station/StationOrderPanel';
+import WeatherPanel from '@/components/WeatherPanel/WeatherPanel';
 import StatsPanel from '@/components/StatsPanel/StatsPanel';
 import DispatchResultModal from '@/components/DispatchResultModal/DispatchResultModal';
 import GameOverModal from '@/components/GameOverModal/GameOverModal';
@@ -59,6 +60,8 @@ export default function Home() {
           </div>
 
           <div className="space-y-6">
+            <WeatherPanel />
+
             <div>
               <div className="mb-3 flex items-center gap-2 text-gray-600">
                 <Train className="w-5 h-5" />

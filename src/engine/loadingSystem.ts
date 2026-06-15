@@ -1,7 +1,8 @@
-import { Train, Carriage, CandyType } from '@/types';
+import { Train, Carriage, CandyType, Weather } from '@/types';
 import { GAME_CONFIG } from '@/data/config';
+import { getFrostLoadMultiplier } from '@/engine/weatherSystem';
 
-export function loadCandiesToTrain(train: Train, candyCounts: Record<CandyType, number>): {
+export function loadCandiesToTrain(train: Train, candyCounts: Record<CandyType, number>, weather?: Weather): {
   train: Train;
   overflow: Record<CandyType, number>;
   totalLoaded: number;
@@ -9,22 +10,24 @@ export function loadCandiesToTrain(train: Train, candyCounts: Record<CandyType, 
   const newCarriages = train.carriages.map(c => ({ ...c }));
   const overflow: Record<string, number> = {};
   let totalLoaded = 0;
+  const loadMultiplier = weather ? getFrostLoadMultiplier(weather) : 1;
 
   for (const candyType of Object.keys(candyCounts) as CandyType[]) {
     const count = candyCounts[candyType];
+    const effectiveCount = Math.floor(count * loadMultiplier);
     const carriage = newCarriages.find(c => c.candyType === candyType);
 
     if (carriage) {
       const availableSpace = carriage.capacity - carriage.currentLoad;
-      const toLoad = Math.min(count, availableSpace);
+      const toLoad = Math.min(effectiveCount, availableSpace);
       carriage.currentLoad += toLoad;
       totalLoaded += toLoad;
 
-      if (count > availableSpace) {
-        overflow[candyType] = count - availableSpace;
+      if (effectiveCount > availableSpace) {
+        overflow[candyType] = effectiveCount - availableSpace;
       }
     } else {
-      overflow[candyType] = count;
+      overflow[candyType] = effectiveCount;
     }
   }
 
